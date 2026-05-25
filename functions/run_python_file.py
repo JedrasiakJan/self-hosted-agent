@@ -1,26 +1,39 @@
 import os
 import subprocess
 from google.genai import types
+from functions.security import is_code_safe  
 
-def run_python_file(working_directory: str, file_path: str, args: list[str] | None = None) -> str:
+def run_python_file(
+    working_directory: str, file_path: str, args: list[str] | None = None
+) -> str:
     try:
         abs_path = os.path.abspath(working_directory)
         target_path = os.path.normpath(os.path.join(abs_path, file_path))
         validated_target = os.path.commonpath([abs_path, target_path]) == abs_path
+        
         if not validated_target:
             return f'Error: Cannot execute "{file_path}" as it is outside the permitted working directory'
+            
         if not os.path.isfile(target_path):
             return f'Error: "{file_path}" does not exist or is not a regular file'
+            
         if not file_path.endswith(".py"):
             return f'Error: "{file_path}" is not a Python file'
+            
+        with open(target_path, "r", encoding="utf-8") as f:
+            code_to_run = f.read()
+            
+        if not is_code_safe(code_to_run):
+            return f'Error: Security Sandbox Blocked execution of "{file_path}". File contains forbidden system commands.'
+
+            
         command = ["python", target_path]
         if args is not None:
             command.extend(args)
 
-
         result = subprocess.run(
             command,
-            cwd = abs_path,
+            cwd=abs_path,
             stdout=subprocess.PIPE,       
             stderr=subprocess.PIPE,        
             text=True,                      
@@ -38,10 +51,11 @@ def run_python_file(working_directory: str, file_path: str, args: list[str] | No
                 output_parts.append(f"STDOUT:\n{result.stdout}")
             if result.stderr:
                 output_parts.append(f"STDERR:\n{result.stderr}")
+                
         return "\n".join(output_parts)
+        
     except Exception as e:
-        return f"Error: executing Python file: {e}"
-
+        return f"Error: {str(e)}"
 
 
 schema_run_python_file = types.FunctionDeclaration(

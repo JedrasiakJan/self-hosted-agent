@@ -1,97 +1,148 @@
 import argparse
 import os
 import sys
+import json
 import warnings
-from dotenv import load_dotenv
-from google import genai
-from google.genai import types
-from prompts import system_prompt
-from call_function import available_functions, call_function
+import re
+from openai import OpenAI
 
-load_dotenv()
-api_key = os.environ.get("GEMINI_API_KEY")
-if api_key is None:
-    raise RuntimeError("Where is the API KEY?")
+# Importy interfejsu wizualnego
+from rich.console import Console
+from rich.panel import Panel
+from rich.live import Live
+from rich.spinner import Spinner
 
-client = genai.Client(api_key=api_key)
+# Import lokalnej logiki wykonawczej
+from call_function import call_function_local
 
+client = OpenAI(
+    base_url="http://localhost:1234/v1",
+    api_key="lm-studio"
+)
+console = Console()
+
+SYSTEM_PROMPT = """
+You are an advanced, stateful AI Agent with direct tool access to a local coding workspace.
+You must solve the user's task using a step-by-step loop.
+
+CRITICAL INSTRUCTION:
+Your response MUST ALWAYS be a single, valid JSON object and nothing else. No conversational greetings, no explanations outside the JSON structure.
+
+JSON RESPONSE FORMAT:
+If you need to use a tool to get information, return this exact format:
+{
+    "thought": "Your reasoning about what to do next based on previous data",
+    "tool_call": {
+        "name": "NAME_OF_THE_TOOL",
+        "arguments": {
+            "ARGUMENT_KEY": "ARGUMENT_VALUE"
+        }
+    }
+}
+
+If you have gathered enough information and are ready to fully answer the user's request, return this exact format:
+{
+    "thought": "I have all the necessary information from the files to answer.",
+    "final_response": "Your complete, comprehensive, and detailed final answer to the user's prompt"
+}
+
+AVAILABLE TOOLS YOU CAN CALL:
+1. get_files_info
+   Arguments: {"directory": "."} or any relative subfolder.
+2. get_file_content
+   Arguments: {"file_path": "relative_path_to_file.py"}
+3. write_file
+   Arguments: {"file_path": "path.py", "content": "file_text_content"}
+4. run_python_file
+   Arguments: {"file_path": "path.py", "args": ["optional", "args"]}
+
+Remember: NEVER guess. If you need to know how the calculator renders output, you MUST call get_files_info or get_file_content first!
+"""
+
+def extract_json(text: str) -> dict | None:
+    """Próbuje wyczyścić tekst ze śmieci i wyciągnąć z niego czysty słownik JSON."""
+    try:
+        # Szukamy bloku między {}
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        if match:
+            return json.loads(match.group(0))
+    except Exception:
+        pass
+    return None
 
 def main():
-    warnings.filterwarnings("ignore", message=".*non-text parts.*")
+    warnings.filterwarnings("ignore")
 
-    parser = argparse.ArgumentParser(description="chatbot")
+    parser = argparse.ArgumentParser(description="Local AI Chatbot")
     parser.add_argument("user_prompt", type=str, help="user prompt")
     parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
     args = parser.parse_args()
 
-    messages: list[types.Content] = [
-        types.Content(role="user", parts=[types.Part(text=args.user_prompt)])
+    # Budujemy czysty kontekst dla modelu jako użytkownik i asystent
+    messages = [
+        {"role": "user", "content": f"{SYSTEM_PROMPT}\n\nUSER PROMPT: {args.user_prompt}"}
     ]
     
+    console.print(Panel(f"[bold magenta]🚀 Local Prompt:[/bold magenta] {args.user_prompt}", title="[bold cyan]Ustrukturyzowany Lokalny Agent AI[/bold cyan]"))
+    
     for i in range(20):
-        if args.verbose:
-            print(f"\n--- Iteration {i + 1} ---")
-
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=messages,
-            config=types.GenerateContentConfig(
-                system_instruction=system_prompt, 
-                temperature=0,
-                tools=[available_functions]
-            ),
-        )
-        
-        if response.usage_metadata is None:
-            raise RuntimeError("API request failed: usage_metadata is missing.")
+        with Live(Spinner("dots", text=f"[yellow] Local LLM is reasoning (Iteration {i + 1}/20)...[/yellow]"), refresh_per_second=15) as live:
+            response = client.chat.completions.create(
+                model="local-model",
+                messages=messages,
+                temperature=0.1  # Niska temperatura wymusza stabilność logiczną
+            )
             
-        if args.verbose:
-            print(f"Prompt tokens: {response.usage_metadata.prompt_token_count}")
-            print(f"Response tokens: {response.usage_metadata.candidates_token_count}")
-
-        # 1. Zapisujemy odpowiedź modelu dbając o poprawną strukturę i rolę
-        if response.candidates:
-            for candidate in response.candidates:
-                if candidate.content:
-                    # Gwarantujemy, że rola to "model", jeśli biblioteka jej nie ustawiła
-                    content_to_append = candidate.content
-                    if not content_to_append.role:
-                        content_to_append.role = "model"
-                    messages.append(content_to_append)
-
-        # 2. Wykonujemy funkcje i zbieramy ich części (parts)
-        function_responses = []
-        if response.function_calls:
-            for function_call in response.function_calls:
-                function_call_result = call_function(function_call, verbose=args.verbose)
-                
-                if not function_call_result.parts:
-                    raise RuntimeError("Validation failed: .parts list is empty.")
-                    
-                first_part = function_call_result.parts[0]
-                
-                if first_part.function_response is None:
-                    raise RuntimeError("Validation failed: .function_response is None.")
-                    
-                if first_part.function_response.response is None:
-                    raise RuntimeError("Validation failed: .response field is None.")
-                
-                function_responses.append(first_part)
-
-        # 3. Jeśli wywołano funkcje, przekazujemy je do historii i kontynuujemy pętlę
-        if function_responses:
-            messages.append(types.Content(role="user", parts=function_responses))
+        ai_response_text = response.choices[0].message.content or ""
+        messages.append({"role": "assistant", "content": ai_response_text})
+        
+        # Próbujemy sparsować odpowiedź strukturalną
+        data = extract_json(ai_response_text)
+        
+        if not data:
+            # Awaryjne wyjście, jeśli model kompletnie zignorował format JSON
+            console.print(f"[dim red]⚠️ Model produced unstructured response. Retrying with enforcement...[/dim red]")
+            messages.append({"role": "user", "content": "ERROR: Your response was not a valid JSON. You MUST output ONLY the requested JSON structure."})
             continue
 
-        # 4. Zakończenie sukcesem
-        if response.text:
-            print("Final response:")
-            print(response.text)
-            break
-    else:
-        print("Error: Agent reached the maximum number of iterations without a final response.")
-        sys.exit(1)
+        # Jeśli model podał swój proces myślowy (thought), drukujemy go w konsoli Fancy
+        if "thought" in data and args.verbose:
+            console.print(f"[dim cyan]🧠 Thought:[/dim cyan] {data['thought']}")
 
+        # OBSŁUGA WYWOŁANIA NARZĘDZIA
+        if "tool_call" in data and data["tool_call"]:
+            tool_data = data["tool_call"]
+            function_name = tool_data.get("name", "")
+            function_args_dict = tool_data.get("arguments", {})
+            
+            console.print(f"⚙️  [bold blue]Executing Tool:[/bold blue] [green]{function_name}[/green]")
+            
+            # Konwertujemy argumenty na format JSON-string, który przyjmuje nasza funkcja pomocnicza
+            args_str = json.dumps(function_args_dict)
+            if args.verbose:
+                console.print(f"   [dim]Args: {args_str}[/dim]")
+                
+            # Wywołanie rzeczywistej funkcji w Pythonie na Twoim dysku!
+            tool_output = call_function_local(function_name, args_str, verbose=False)
+            
+            if args.verbose:
+                console.print(f"   ↳ [italic green]Tool Output:[/italic green] [dim]{tool_output}[/dim]")
+                
+            # Wstrzykujemy wynik do pamięci modelu jako kolejna wiadomość użytkownika
+            messages.append({
+                "role": "user",
+                "content": json.dumps({"status": "success", "tool_result": tool_output})
+            })
+            continue
+
+        # OBSŁUGA KOŃCOWEJ ODPOWIEDZI
+        if "final_response" in data:
+            console.print("\n")
+            console.print(Panel(data["final_response"], title="[bold green]🎯 Final Response[/bold green]", border_style="green"))
+            break
+            
+        # Gdyby model zwrócił JSON, ale bez kluczowych pól
+        messages.append({"role": "user", "content": "ERROR: Missing 'tool_call' or 'final_response' keys in your JSON."})
 
 if __name__ == "__main__":
     main()
