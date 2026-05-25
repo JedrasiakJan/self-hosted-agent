@@ -1,5 +1,4 @@
 import os
-from google.genai import types
 from functions.security import is_code_safe  
 
 def write_file(working_directory: str, file_path: str, content: str) -> str:
@@ -8,18 +7,23 @@ def write_file(working_directory: str, file_path: str, content: str) -> str:
         target_path = os.path.normpath(os.path.join(abs_path, file_path))
         valid_targ_dic = os.path.commonpath([abs_path, target_path]) == abs_path
         
+        # 1. Blokada Path Traversal
         if not valid_targ_dic:
             return f'Error: Cannot write to "{file_path}" as it is outside the permitted working directory'
             
+        # 2. Blokada AST Sandbox
         if not is_code_safe(content):
             return f'Error: Security Sandbox Blocked writing to "{file_path}". Code contains forbidden operations or imports.'
             
+        # 3. Blokada nadpisywania katalogów
         if os.path.isdir(target_path):
             return f'Error: Cannot write to "{file_path}" as it is a directory'
 
+        # 4. Automatyczne tworzenie struktury folderów nadrzędnych
         parent_dic = os.path.dirname(target_path)
         os.makedirs(parent_dic, exist_ok=True)
 
+        # 5. Fizyczny zapis na dysku Windowsa
         with open(target_path, "w", encoding="utf-8") as f:
             f.write(content)
             
@@ -27,23 +31,3 @@ def write_file(working_directory: str, file_path: str, content: str) -> str:
         
     except Exception as e:
         return f"Error: {str(e)}"
-
-
-schema_write_file = types.FunctionDeclaration(
-    name="write_file",
-    description="Overwrites or creates a file with the specified content.",
-    parameters=types.Schema(
-        type=types.Type.OBJECT,
-        properties={
-            "file_path": types.Schema(
-                type=types.Type.STRING,
-                description="The relative path of the file to write to.",
-            ),
-            "content": types.Schema(
-                type=types.Type.STRING,
-                description="The text content to write into the file.",
-            ),
-        },
-        required=["file_path", "content"],
-    ),
-)

@@ -5,6 +5,8 @@ import json
 import warnings
 import re
 from openai import OpenAI
+# POPRAWIONO: Import jawnego typu wiadomości dla biblioteki OpenAI
+from openai.types.chat import ChatCompletionMessageParam
 
 # Importy interfejsu wizualnego
 from rich.console import Console
@@ -78,8 +80,8 @@ def main():
     parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
     args = parser.parse_args()
 
-    # Budujemy czysty kontekst dla modelu jako użytkownik i asystent
-    messages = [
+    # POPRAWIONO: Nadano liście silny typ ChatCompletionMessageParam, co likwiduje błąd typowania
+    messages: list[ChatCompletionMessageParam] = [
         {"role": "user", "content": f"{SYSTEM_PROMPT}\n\nUSER PROMPT: {args.user_prompt}"}
     ]
     
@@ -90,7 +92,7 @@ def main():
             response = client.chat.completions.create(
                 model="local-model",
                 messages=messages,
-                temperature=0.1  # Niska temperatura wymusza stabilność logiczną
+                temperature=0.1  
             )
             
         ai_response_text = response.choices[0].message.content or ""
@@ -100,12 +102,10 @@ def main():
         data = extract_json(ai_response_text)
         
         if not data:
-            # Awaryjne wyjście, jeśli model kompletnie zignorował format JSON
             console.print(f"[dim red]⚠️ Model produced unstructured response. Retrying with enforcement...[/dim red]")
             messages.append({"role": "user", "content": "ERROR: Your response was not a valid JSON. You MUST output ONLY the requested JSON structure."})
             continue
 
-        # Jeśli model podał swój proces myślowy (thought), drukujemy go w konsoli Fancy
         if "thought" in data and args.verbose:
             console.print(f"[dim cyan]🧠 Thought:[/dim cyan] {data['thought']}")
 
@@ -117,18 +117,15 @@ def main():
             
             console.print(f"⚙️  [bold blue]Executing Tool:[/bold blue] [green]{function_name}[/green]")
             
-            # Konwertujemy argumenty na format JSON-string, który przyjmuje nasza funkcja pomocnicza
             args_str = json.dumps(function_args_dict)
             if args.verbose:
                 console.print(f"   [dim]Args: {args_str}[/dim]")
                 
-            # Wywołanie rzeczywistej funkcji w Pythonie na Twoim dysku!
             tool_output = call_function_local(function_name, args_str, verbose=False)
             
             if args.verbose:
                 console.print(f"   ↳ [italic green]Tool Output:[/italic green] [dim]{tool_output}[/dim]")
                 
-            # Wstrzykujemy wynik do pamięci modelu jako kolejna wiadomość użytkownika
             messages.append({
                 "role": "user",
                 "content": json.dumps({"status": "success", "tool_result": tool_output})
@@ -141,7 +138,6 @@ def main():
             console.print(Panel(data["final_response"], title="[bold green]🎯 Final Response[/bold green]", border_style="green"))
             break
             
-        # Gdyby model zwrócił JSON, ale bez kluczowych pól
         messages.append({"role": "user", "content": "ERROR: Missing 'tool_call' or 'final_response' keys in your JSON."})
 
 if __name__ == "__main__":

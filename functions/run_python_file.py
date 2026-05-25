@@ -1,6 +1,5 @@
 import os
 import subprocess
-from google.genai import types
 from functions.security import is_code_safe  
 
 def run_python_file(
@@ -11,22 +10,27 @@ def run_python_file(
         target_path = os.path.normpath(os.path.join(abs_path, file_path))
         validated_target = os.path.commonpath([abs_path, target_path]) == abs_path
         
+        # 1. Zabezpieczenie ścieżki (Path Traversal)
         if not validated_target:
             return f'Error: Cannot execute "{file_path}" as it is outside the permitted working directory'
             
+        # 2. Sprawdzenie typu obiektu
         if not os.path.isfile(target_path):
             return f'Error: "{file_path}" does not exist or is not a regular file'
             
+        # 3. Weryfikacja rozszerzenia skryptu
         if not file_path.endswith(".py"):
             return f'Error: "{file_path}" is not a Python file'
             
+        # 4. Odczyt zawartości pliku do analizy AST Sandbox
         with open(target_path, "r", encoding="utf-8") as f:
             code_to_run = f.read()
             
+        # 5. Blokada bezpieczeństwa przed wykonaniem kodu
         if not is_code_safe(code_to_run):
             return f'Error: Security Sandbox Blocked execution of "{file_path}". File contains forbidden system commands.'
 
-            
+        # 6. Przygotowanie i uruchomienie podprocesu
         command = ["python", target_path]
         if args is not None:
             command.extend(args)
@@ -56,24 +60,3 @@ def run_python_file(
         
     except Exception as e:
         return f"Error: {str(e)}"
-
-
-schema_run_python_file = types.FunctionDeclaration(
-    name="run_python_file",
-    description="Executes a specified Python file within the working directory using a subprocess and returns its output.",
-    parameters=types.Schema(
-        type=types.Type.OBJECT,
-        properties={
-            "file_path": types.Schema(
-                type=types.Type.STRING,
-                description="The relative path of the Python file to execute (must end with .py).",
-            ),
-            "args": types.Schema(
-                type=types.Type.ARRAY,
-                items=types.Schema(type=types.Type.STRING),
-                description="Optional list of command-line arguments to pass to the script.",
-            ),
-        },
-        required=["file_path"],
-    ),
-)
