@@ -1,0 +1,27 @@
+# Klucze API i konfiguracja (NAJWAŻNIEJSZE!)
+.env
+.env.*
+
+# Środowisko wirtualne Pythona
+.venv/
+venv/
+ENV/
+
+# Pliki tymczasowe Pythona i cache
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Pliki budowania i dystrybucji
+build/
+dist/
+wheels/
+*.egg-info
+
+# Pliki systemowe i edytorów (opcjonalne)
+.vscode/
+.idea/
+.DS_Store
