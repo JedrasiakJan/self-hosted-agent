@@ -17,9 +17,12 @@ from rich.spinner import Spinner
 # Import lokalnej logiki wykonawczej
 from call_function import call_function_local
 
+base_url = os.environ.get("LOCAL_LLM_BASE_URL", "http://localhost:1234/v1")
+api_key = os.environ.get("LOCAL_LLM_API_KEY", "lm-studio")
+
 client = OpenAI(
-    base_url="http://localhost:1234/v1",
-    api_key="lm-studio"
+    base_url=base_url,
+    api_key=api_key
 )
 console = Console()
 
